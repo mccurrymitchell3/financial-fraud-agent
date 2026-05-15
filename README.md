@@ -6,11 +6,15 @@ The project is intentionally simple: the customer data, transactions, sanctions 
 
 ## What It Does
 
-The application exposes one investigation endpoint:
+The application exposes versioned investigation endpoints:
 
 ```http
 GET /investigate/{customer_id}
+GET /v1/investigate/{customer_id}
+GET /v2/investigate/{customer_id}
 ```
+
+The unversioned `/investigate/{customer_id}` route is a compatibility alias for v1.
 
 When called, the app:
 
@@ -18,7 +22,7 @@ When called, the app:
 2. Looks up the customer profile.
 3. Retrieves recent transactions.
 4. Checks transactions against high-risk jurisdictions.
-5. Retrieves relevant policy text from `data/policies.txt`.
+5. Retrieves relevant policy text from that version's `data/policies.txt`.
 6. Calculates a deterministic risk score.
 7. Marks the case for escalation when the risk score is at least `70`.
 8. Sends the collected evidence to OpenAI to generate a structured fraud investigation report.
@@ -30,20 +34,26 @@ When called, the app:
 ├── app.py
 ├── api/
 │   └── routes.py
-├── agents/
-│   ├── planner.py
-│   └── investigator.py
-├── models/
-│   ├── state.py
-│   └── output.py
-├── tools/
-│   ├── customer_lookup.py
-│   ├── transactions.py
-│   ├── sanctions.py
-│   ├── risk_rules.py
-│   └── policy_rag.py
-├── data/
-│   └── policies.txt
+├── v1/
+│   ├── fraud_agents/
+│   │   ├── planner.py
+│   │   └── investigator.py
+│   ├── models/
+│   │   ├── state.py
+│   │   └── output.py
+│   ├── tools/
+│   │   ├── customer_lookup.py
+│   │   ├── transactions.py
+│   │   ├── sanctions.py
+│   │   ├── risk_rules.py
+│   │   └── policy_rag.py
+│   └── data/
+│       └── policies.txt
+├── v2/
+│   ├── fraud_agents/
+│   ├── models/
+│   ├── tools/
+│   └── data/
 └── requirements.txt
 ```
 
@@ -53,11 +63,11 @@ When called, the app:
 
 `app.py` creates the FastAPI application and registers the router from `api/routes.py`.
 
-`api/routes.py` defines the `/investigate/{customer_id}` endpoint. The route is intentionally thin: it calls the investigation planner, passes the resulting state to the investigator, and returns the final report.
+`api/routes.py` defines the v1 and v2 investigation endpoints. The routes are intentionally thin: each calls that version's investigation planner, passes the resulting state to that version's investigator, and returns the final report.
 
 ### Investigation State
 
-`models/state.py` defines `InvestigationState`, the shared object passed through the workflow. It stores:
+Each version has a `models/state.py` file that defines `InvestigationState`, the shared object passed through the workflow. It stores:
 
 - `customer_id`
 - `customer_profile`
@@ -71,19 +81,19 @@ This state object acts as the case file for the investigation.
 
 ### Planner
 
-`agents/planner.py` orchestrates the deterministic part of the investigation. It does not call the language model. Instead, it coordinates local tools and builds the evidence bundle:
+Each version's `fraud_agents/planner.py` orchestrates the deterministic part of the investigation. It does not call the language model. Instead, it coordinates local tools and builds the evidence bundle:
 
 - `get_customer_profile()` returns mock customer details.
 - `get_transactions()` returns mock transaction data.
 - `sanctions_check()` flags transactions involving configured high-risk countries.
-- `retrieve_policy_context()` reads relevant policy lines from `data/policies.txt`.
+- `retrieve_policy_context()` reads relevant policy lines from that version's `data/policies.txt`.
 - `calculate_risk()` computes a rule-based risk score.
 
 The planner sets `escalation_required` to `True` when the risk score is `70` or higher.
 
 ### Risk Rules
 
-`tools/risk_rules.py` contains simple deterministic scoring logic:
+Each version's `tools/risk_rules.py` contains simple deterministic scoring logic:
 
 - Transactions over `5000` add `25` risk points.
 - Transactions at `"Crypto Exchange"` add `20` risk points.
@@ -94,7 +104,7 @@ These rules make the risk score auditable before the model generates any narrati
 
 ### Report Generation
 
-`agents/investigator.py` turns the completed investigation state into a structured report using OpenAI.
+Each version's `fraud_agents/investigator.py` turns the completed investigation state into a structured report using OpenAI.
 
 The investigator:
 
@@ -102,13 +112,13 @@ The investigator:
 2. Creates an OpenAI client.
 3. Builds a text evidence packet from the investigation state.
 4. Sends the packet to the Responses API.
-5. Parses the response into the `InvestigationReport` Pydantic model from `models/output.py`.
+5. Parses the response into the `InvestigationReport` Pydantic model from that version's `models/output.py`.
 
 The system prompt instructs the model to use only the provided evidence, avoid speculation, and be concise.
 
 ### Output Model
 
-`models/output.py` defines the final report schema:
+Each version's `models/output.py` defines the final report schema:
 
 - `customer_id`
 - `summary`
@@ -152,6 +162,8 @@ Then call the investigation endpoint:
 
 ```bash
 curl http://127.0.0.1:8000/investigate/1001
+curl http://127.0.0.1:8000/v1/investigate/1001
+curl http://127.0.0.1:8000/v2/investigate/1001
 ```
 
 ## Current Limitations
@@ -161,4 +173,3 @@ curl http://127.0.0.1:8000/investigate/1001
 - Policy retrieval is a basic text-file scan, not a true vector search or retrieval system.
 - The risk score is deterministic but intentionally minimal.
 - The project is a prototype and should not be used for real financial investigations without production data sources, validation, logging, audit controls, and compliance review.
-

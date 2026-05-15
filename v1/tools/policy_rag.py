@@ -1,5 +1,9 @@
+from pathlib import Path
+
+
 def retrieve_policy_context(query: str):
-    with open("data/policies.txt", "r") as f:
+    policy_path = Path(__file__).resolve().parents[1] / "data" / "policies.txt"
+    with policy_path.open("r") as f:
         policies = f.read()
     relevant = []
     for line in policies.splitlines():
